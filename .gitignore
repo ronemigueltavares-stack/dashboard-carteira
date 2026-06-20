@@ -1,0 +1,7 @@
+﻿# Claude Code
+.claude/
+
+# Arquivos temporários do Windows
+Thumbs.db
+desktop.ini
+*.tmp
