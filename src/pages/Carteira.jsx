@@ -1,133 +1,165 @@
 import { useEffect, useState } from 'react'
-import { collection, onSnapshot, query, orderBy, limit } from 'firebase/firestore'
+import { collection, onSnapshot } from 'firebase/firestore'
 import { db } from '../firebase'
 import { useAuth } from '../AuthContext'
 
+const TIPOS_RENDIMENTO = ['DIV', 'JCP', 'RENDIMENTO']
+
+function calcularPosicoes(lancamentos, proventos) {
+  const mapa = {}
+
+  for (const l of lancamentos) {
+    const tk = l.ativo
+    if (!mapa[tk]) mapa[tk] = { ativo: tk, qtd: 0, custo: 0, proventos: 0 }
+
+    if (l.tipo === 'COMPRA' || l.tipo === 'BONIF') {
+      // BONIF = ações bonificadas: entra como custo e quantidade
+      mapa[tk].qtd   += l.qtd   ?? 0
+      mapa[tk].custo += l.total ?? 0
+    } else if (l.tipo === 'VENDA') {
+      const pmAtual = mapa[tk].qtd > 0 ? mapa[tk].custo / mapa[tk].qtd : 0
+      mapa[tk].qtd   -= l.qtd ?? 0
+      mapa[tk].custo -= pmAtual * (l.qtd ?? 0)
+    }
+  }
+
+  for (const p of proventos) {
+    const tk = p.ativo
+    // Só abate DIV/JCP/RENDIMENTO — BONIF já entrou pelo lançamento
+    if (mapa[tk] && TIPOS_RENDIMENTO.includes(p.tipo)) {
+      mapa[tk].proventos += p.valor ?? 0
+    }
+  }
+
+  return Object.values(mapa)
+    .filter(p => p.qtd > 0.001)
+    .map(p => {
+      const custoAjustado = Math.max(p.custo - p.proventos, 0)
+      return {
+        ...p,
+        custoAjustado,
+        pm:        p.custo / p.qtd,
+        pmAjustado: custoAjustado / p.qtd,
+      }
+    })
+    .sort((a, b) => b.custo - a.custo)
+}
+
+function fmt(v) {
+  if (v == null) return '-'
+  return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+}
+
+function fmtQtd(v) {
+  if (v == null) return '-'
+  return Number.isInteger(v) ? v : v.toLocaleString('pt-BR', { maximumFractionDigits: 2 })
+}
+
 export default function Carteira() {
   const user = useAuth()
-  const [lancamentos, setLancamentos] = useState([])
-  const [proventos, setProventos] = useState([])
+  const [posicoes, setPosicoes] = useState([])
+  const [total, setTotal] = useState(0)
+  const [totalProventos, setTotalProventos] = useState(0)
   const [carregando, setCarregando] = useState(true)
+  const [lancamentos, setLancamentos] = useState(null)
+  const [proventos, setProventos]     = useState(null)
 
   useEffect(() => {
-    const qLanc = query(
-      collection(db, `users/${user.uid}/lancamentos`),
-      orderBy('data', 'desc'),
-      limit(10)
-    )
-    const qProv = query(
-      collection(db, `users/${user.uid}/proventos`),
-      orderBy('data', 'desc'),
-      limit(10)
-    )
-
-    const unsubLanc = onSnapshot(qLanc, snap => {
-      setLancamentos(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      setCarregando(false)
+    const unsubL = onSnapshot(collection(db, `users/${user.uid}/lancamentos`), snap => {
+      setLancamentos(snap.docs.map(d => d.data()))
     })
-
-    const unsubProv = onSnapshot(qProv, snap => {
-      setProventos(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    const unsubP = onSnapshot(collection(db, `users/${user.uid}/proventos`), snap => {
+      setProventos(snap.docs.map(d => d.data()))
     })
-
-    return () => { unsubLanc(); unsubProv() }
+    return () => { unsubL(); unsubP() }
   }, [user.uid])
 
-  function formatData(ts) {
-    if (!ts) return '-'
-    const d = ts.toDate ? ts.toDate() : new Date(ts)
-    return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })
-  }
-
-  function formatValor(v) {
-    if (v == null) return '-'
-    return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-  }
+  useEffect(() => {
+    if (lancamentos === null || proventos === null) return
+    const pos = calcularPosicoes(lancamentos, proventos)
+    setPosicoes(pos)
+    setTotal(pos.reduce((s, p) => s + p.custo, 0))
+    setTotalProventos(pos.reduce((s, p) => s + p.proventos, 0))
+    setCarregando(false)
+  }, [lancamentos, proventos])
 
   if (carregando) {
     return (
       <div style={{ color: 'var(--dim)', fontSize: 14, textAlign: 'center', padding: 40 }}>
-        Carregando dados...
+        Calculando posições...
       </div>
     )
   }
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+  const custoAjustadoTotal = posicoes.reduce((s, p) => s + p.custoAjustado, 0)
 
-      {/* Resumo */}
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+
+      {/* Cards de resumo */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         {[
-          { label: 'Lançamentos sincronizados', valor: '519', cor: 'var(--teal)' },
-          { label: 'Proventos sincronizados', valor: '598', cor: 'var(--blue)' },
+          { label: 'Ativos em carteira',    valor: posicoes.length,            cor: 'var(--text)' },
+          { label: 'Custo total investido', valor: fmt(total),                  cor: 'var(--teal)' },
+          { label: 'Proventos recebidos',   valor: fmt(totalProventos),         cor: 'var(--blue)' },
+          { label: 'Custo ajustado',        valor: fmt(custoAjustadoTotal),     cor: 'var(--pos)'  },
         ].map(k => (
           <div key={k.label} style={{
             background: 'var(--card)', border: '0.5px solid var(--border)',
             borderRadius: 12, padding: '14px 20px', flex: '1 1 160px',
           }}>
-            <div style={{ fontSize: 11, color: 'var(--mut)', marginBottom: 6 }}>{k.label}</div>
-            <div style={{ fontSize: 24, fontWeight: 600, color: k.cor }}>{k.valor}</div>
+            <div style={{ fontSize: 11, color: 'var(--mut)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{k.label}</div>
+            <div style={{ fontSize: 20, fontWeight: 600, color: k.cor }}>{k.valor}</div>
           </div>
         ))}
       </div>
 
-      {/* Tabela de Lançamentos */}
-      <div style={{ background: 'var(--card)', border: '0.5px solid var(--border)', borderRadius: 14, padding: '18px 18px 12px' }}>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Lançamentos recentes</div>
-        <div style={{ fontSize: 12, color: 'var(--mut)', marginBottom: 14 }}>Últimos 10 · dados em tempo real do Firestore</div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
-                {['Data', 'Ativo', 'Tipo', 'Qtd', 'Valor unit.', 'Total'].map(h => (
-                  <th key={h} style={{ padding: '0 8px 10px', textAlign: 'left', fontSize: 11, color: 'var(--mut)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {lancamentos.map(l => (
-                <tr key={l.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
-                  <td style={{ padding: '10px 8px', color: 'var(--mut)', whiteSpace: 'nowrap' }}>{formatData(l.data)}</td>
-                  <td style={{ padding: '10px 8px', fontWeight: 600 }}>{l.ativo}</td>
-                  <td style={{ padding: '10px 8px' }}>
-                    <span style={{
-                      fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 6,
-                      background: l.tipo === 'COMPRA' ? 'rgba(61,207,142,0.12)' : 'rgba(240,104,107,0.12)',
-                      color: l.tipo === 'COMPRA' ? 'var(--pos)' : 'var(--neg)',
-                    }}>{l.tipo}</span>
-                  </td>
-                  <td style={{ padding: '10px 8px' }}>{l.qtd}</td>
-                  <td style={{ padding: '10px 8px', color: 'var(--mut)' }}>{formatValor(l.valor)}</td>
-                  <td style={{ padding: '10px 8px', fontWeight: 600 }}>{formatValor(l.total)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* Tabela de posições */}
+      <div style={{ background: 'var(--card)', border: '0.5px solid var(--border)', borderRadius: 14, padding: '18px 18px 8px' }}>
+        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Posições atuais</div>
+        <div style={{ fontSize: 12, color: 'var(--mut)', marginBottom: 16 }}>
+          {posicoes.length} ativos · PM ajustado = (custo − proventos) ÷ quantidade
         </div>
-      </div>
 
-      {/* Tabela de Proventos */}
-      <div style={{ background: 'var(--card)', border: '0.5px solid var(--border)', borderRadius: 14, padding: '18px 18px 12px' }}>
-        <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>Proventos recentes</div>
-        <div style={{ fontSize: 12, color: 'var(--mut)', marginBottom: 14 }}>Últimos 10</div>
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
             <thead>
               <tr style={{ borderBottom: '0.5px solid var(--border)' }}>
-                {['Data', 'Ativo', 'Tipo', 'Valor'].map(h => (
-                  <th key={h} style={{ padding: '0 8px 10px', textAlign: 'left', fontSize: 11, color: 'var(--mut)', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
+                {['#', 'Ativo', 'Qtd', 'PM original', 'Proventos', 'PM ajustado', 'Custo', '% Cart.'].map((h, i) => (
+                  <th key={h} style={{
+                    padding: '0 10px 10px',
+                    textAlign: i <= 1 ? 'left' : 'right',
+                    fontSize: 11, color: i === 5 ? 'var(--pos)' : 'var(--mut)',
+                    fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.05em',
+                  }}>
+                    {h}
+                  </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {proventos.map(p => (
-                <tr key={p.id} style={{ borderBottom: '0.5px solid var(--border)' }}>
-                  <td style={{ padding: '10px 8px', color: 'var(--mut)', whiteSpace: 'nowrap' }}>{formatData(p.data)}</td>
-                  <td style={{ padding: '10px 8px', fontWeight: 600 }}>{p.ativo}</td>
-                  <td style={{ padding: '10px 8px', color: 'var(--blue)', fontSize: 12, fontWeight: 600 }}>{p.tipo}</td>
-                  <td style={{ padding: '10px 8px', fontWeight: 600, color: 'var(--pos)' }}>{formatValor(p.valor)}</td>
-                </tr>
-              ))}
+              {posicoes.map((p, i) => {
+                const pct = total > 0 ? (p.custo / total) * 100 : 0
+                return (
+                  <tr key={p.ativo} style={{ borderBottom: '0.5px solid var(--border)' }}>
+                    <td style={{ padding: '11px 10px', color: 'var(--dim)', fontSize: 11 }}>{i + 1}</td>
+                    <td style={{ padding: '11px 10px', fontWeight: 600 }}>{p.ativo}</td>
+                    <td style={{ padding: '11px 10px', textAlign: 'right', color: 'var(--mut)' }}>{fmtQtd(p.qtd)}</td>
+                    <td style={{ padding: '11px 10px', textAlign: 'right', color: 'var(--mut)' }}>{fmt(p.pm)}</td>
+                    <td style={{ padding: '11px 10px', textAlign: 'right', color: 'var(--blue)' }}>{fmt(p.proventos)}</td>
+                    <td style={{ padding: '11px 10px', textAlign: 'right', fontWeight: 600, color: 'var(--pos)' }}>{fmt(p.pmAjustado)}</td>
+                    <td style={{ padding: '11px 10px', textAlign: 'right', fontWeight: 600 }}>{fmt(p.custo)}</td>
+                    <td style={{ padding: '11px 10px', textAlign: 'right' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
+                        <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>
+                          <div style={{ width: `${Math.min(pct, 100)}%`, height: '100%', borderRadius: 2, background: 'var(--teal)' }} />
+                        </div>
+                        <span style={{ fontSize: 12, color: 'var(--mut)', minWidth: 32, textAlign: 'right' }}>{pct.toFixed(1)}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         </div>
