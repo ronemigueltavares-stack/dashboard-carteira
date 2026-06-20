@@ -66,6 +66,18 @@ def limpar_valor(v):
         return None
 
 
+def limpar_pct(v):
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    s = re.sub(r'[%\s]', '', str(v)).replace(',', '.')
+    try:
+        return float(s) / 100
+    except ValueError:
+        return None
+
+
 def md5(d):
     return hashlib.md5(
         json.dumps(d, sort_keys=True, default=str).encode()
@@ -87,6 +99,24 @@ def sync():
 
     print(f"Lendo planilha: {EXCEL_FILE}")
     wb = openpyxl.load_workbook(EXCEL_FILE, data_only=True)
+
+    # Ler mapa de classes da aba Cadastro
+    def simplificar_tipo(t):
+        if not t: return 'Acao'
+        t = str(t).strip()
+        if t == 'FII':  return 'FII'
+        if t == 'ETF':  return 'ETF'
+        if t == 'BDR':  return 'BDR'
+        if t in ('Fundos', 'Tesouro Direto', 'Renda Fixa'): return 'RF'
+        return 'Acao'
+
+    classes = {}
+    for row in wb['Cadastro'].iter_rows(min_row=4, values_only=True):
+        ticker = row[2]
+        tipo   = row[0]
+        if ticker and tipo:
+            classes[str(ticker).strip().upper()] = simplificar_tipo(tipo)
+
     ws = wb['Lançamentos']
 
     lanc_novos = lanc_skip = prov_novos = prov_skip = 0
@@ -142,9 +172,68 @@ def sync():
             else:
                 prov_skip += 1
 
+    # ── Posições consolidadas (aba "Carteira") ────────────────────────────
+    ws_cart = wb['Carteira']
+    pos_col = db.collection(f'users/{USER_UID}/posicoes')
+    agora   = datetime.utcnow()
+    pos_count = 0
+    resumo = {}
+
+    for row in ws_cart.iter_rows(min_row=4, values_only=True):
+        ticker = row[0] if len(row) > 0 else None
+        if not ticker:
+            continue
+        ticker = str(ticker).strip().upper()
+
+        # Linha de totais
+        if ticker == 'TOTAIS':
+            resumo = {
+                'custo':        limpar_valor(row[3]),
+                'patrimonio':   limpar_valor(row[5]),
+                'rentabilidadeRS': limpar_valor(row[6]),
+                'rentabilidadePct': limpar_pct(row[7]),
+                'proventos':    limpar_valor(row[8]),
+                'yieldOnCost':  limpar_pct(row[9]),
+                'atualizadoEm': agora,
+            }
+            db.collection(f'users/{USER_UID}/resumo').document('carteira').set(resumo)
+            continue
+
+        # Linha de ativo
+        qtd  = row[1]
+        if qtd is None or str(qtd).strip() in ('', '0'):
+            continue
+        try:
+            qtd_num = float(str(qtd).replace('.', '').replace(',', '.'))
+        except Exception:
+            continue
+
+        pos_col.document(ticker).set({
+            'ticker':          ticker,
+            'classe':          classes.get(ticker, 'Acao'),
+            'qtd':             qtd_num,
+            'pm':              limpar_valor(row[2]),
+            'custo':           limpar_valor(row[3]),
+            'cotacao':         limpar_valor(row[4]),
+            'patrimonio':      limpar_valor(row[5]),
+            'rentabilidadeRS': limpar_valor(row[6]),
+            'rentabilidadePct':limpar_pct(row[7]),
+            'proventos':       limpar_valor(row[8]),
+            'yieldOnCost':     limpar_pct(row[9]),
+            'pctAtual':        limpar_pct(row[10]),
+            'pctIdeal':        limpar_pct(row[11]),
+            'balanceamento':   limpar_valor(row[12]),
+            'segmento':        str(row[14]).strip() if row[14] else None,
+            'atualizadoEm':    agora,
+        })
+        pos_count += 1
+
     print()
     print(f"Lancamentos: {lanc_novos} novos  |  {lanc_skip} ja existiam")
     print(f"Proventos:   {prov_novos} novos  |  {prov_skip} ja existiam")
+    print(f"Posicoes:    {pos_count} atualizadas")
+    if resumo:
+        print(f"Resumo:      Patrimonio R${resumo.get('patrimonio',0):,.2f}  |  Custo R${resumo.get('custo',0):,.2f}")
     print("Sincronizacao concluida!")
 
 
