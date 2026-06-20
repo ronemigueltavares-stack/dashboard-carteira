@@ -1,6 +1,16 @@
 ﻿# Claude Code
 .claude/
 
+# Dependências
+node_modules/
+
+# Build
+dist/
+
+# Variáveis de ambiente (credenciais — nunca versionar)
+.env
+.env.local
+
 # Arquivos temporários do Windows
 Thumbs.db
 desktop.ini
