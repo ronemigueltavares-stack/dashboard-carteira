@@ -1,0 +1,27 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #0e1117;
+  --card: #161a22;
+  --card2: #1c212b;
+  --border: rgba(255,255,255,0.06);
+  --border2: rgba(255,255,255,0.10);
+  --text: #e8eaed;
+  --mut: #9aa0aa;
+  --dim: #6b7280;
+  --teal: #1d9e75;
+  --blue: #4d94e8;
+  --purple: #7f77dd;
+  --coral: #e07a52;
+  --pos: #3ecf8e;
+  --neg: #f0686b;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font-family: inherit; }
