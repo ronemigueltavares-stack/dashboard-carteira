@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { signOut } from 'firebase/auth'
 import { auth } from './firebase'
 import { useAuth } from './AuthContext'
+import Carteira from './pages/Carteira'
 
 export default function Layout() {
   const [aba, setAba] = useState('carteira')
@@ -92,14 +93,7 @@ export default function Layout() {
         </nav>
 
         {/* Conteúdo das abas */}
-        {aba === 'carteira' && (
-          <div style={{
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            height: 300, color: 'var(--dim)', fontSize: 14,
-          }}>
-            Página Carteira — em construção
-          </div>
-        )}
+        {aba === 'carteira' && <Carteira />}
 
         {aba === 'mercado' && (
           <div style={{
