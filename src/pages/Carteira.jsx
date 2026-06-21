@@ -118,10 +118,10 @@ function EvolucaoDividendos({ proventos }) {
   const porAno = {}
   proventos.filter(p => TIPOS_REND.has(p.tipo)).forEach(p => {
     const d = p.data?.toDate ? p.data.toDate() : new Date(p.data)
-    const ano = d.getFullYear()
+    const ano = d.getUTCFullYear()
     if (!porAno[ano]) porAno[ano] = { total: 0, meses: new Set() }
     porAno[ano].total += p.valor || 0
-    porAno[ano].meses.add(d.getMonth())
+    porAno[ano].meses.add(d.getUTCMonth())
   })
 
   const anoAtual = new Date().getFullYear()
@@ -178,13 +178,119 @@ function EvolucaoDividendos({ proventos }) {
   )
 }
 
+/* ── Agenda de Proventos ──────────────────────────────────────────────── */
+function AgendaProventos({ proventos }) {
+  const hoje     = new Date()
+  const anoAtual = hoje.getFullYear()
+  const mesAtual = hoje.getMonth()
+
+  // 12 meses: -5 até +6 em relação ao mês atual
+  const janelas = []
+  for (let i = -5; i <= 6; i++) {
+    const d = new Date(anoAtual, mesAtual + i, 1)
+    janelas.push({ ano: d.getFullYear(), mes: d.getMonth(), tipo: i < 0 ? 'recebido' : i === 0 ? 'atual' : 'futuro' })
+  }
+
+  // Somar proventos por ano-mês (UTC para evitar deslocamento de fuso)
+  const porAnoMes = {}
+  proventos.filter(p => TIPOS_REND.has(p.tipo)).forEach(p => {
+    const d = p.data?.toDate ? p.data.toDate() : new Date(p.data)
+    const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}`
+    porAnoMes[key] = (porAnoMes[key] || 0) + (p.valor || 0)
+  })
+
+  // Histórico por mês do calendário (para estimar meses futuros)
+  const histMes = {}
+  proventos.filter(p => TIPOS_REND.has(p.tipo)).forEach(p => {
+    const d = p.data?.toDate ? p.data.toDate() : new Date(p.data)
+    const ano = d.getUTCFullYear(), mes = d.getUTCMonth()
+    if (ano < anoAtual || (ano === anoAtual && mes < mesAtual)) {
+      if (!histMes[mes]) histMes[mes] = {}
+      histMes[mes][ano] = (histMes[mes][ano] || 0) + (p.valor || 0)
+    }
+  })
+
+  // Média dos últimos 3 anos do mesmo mês
+  function estimar(mes) {
+    const h = histMes[mes]
+    if (!h) return 0
+    const anos = Object.keys(h).map(Number).sort((a,b) => b-a).slice(0, 3)
+    return anos.reduce((s, a) => s + h[a], 0) / anos.length
+  }
+
+  const dados = janelas.map(({ ano, mes, tipo }) => {
+    const valor = (tipo === 'recebido' || tipo === 'atual')
+      ? (porAnoMes[`${ano}-${mes}`] || 0)
+      : estimar(mes)
+    return { label: `${MESES[mes]}/${String(ano).slice(2)}`, valor: Math.round(valor), tipo }
+  })
+
+  const maxVal = Math.max(...dados.map(d => d.valor), 1)
+  const corBarra = tipo => tipo === 'recebido' ? '#1d9e75' : tipo === 'atual' ? '#4d94e8' : '#9fe1cb'
+
+  const totalRecebido  = dados.filter(d => d.tipo !== 'futuro').reduce((s,d) => s+d.valor, 0)
+  const totalEstimado  = dados.filter(d => d.tipo === 'futuro').reduce((s,d) => s+d.valor, 0)
+
+  const TooltipAgenda = ({ active, payload }) => {
+    if (!active || !payload?.length) return null
+    const d = payload[0].payload
+    const label = d.tipo === 'recebido' ? 'Recebido' : d.tipo === 'atual' ? 'Mês atual' : 'Estimado'
+    return (
+      <div style={{ ...TT_STYLE, padding:'8px 12px' }}>
+        <div style={{ fontWeight:600, marginBottom:4 }}>{d.label}</div>
+        <div style={{ color: corBarra(d.tipo) }}>{label}: <b>{fmt(d.valor)}</b></div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ background:'var(--card)', border:'0.5px solid var(--border)', borderRadius:14, padding:'18px 18px 12px' }}>
+      <div style={{ fontSize:14, fontWeight:600 }}>Agenda de proventos</div>
+      <div style={{ fontSize:12, color:'var(--mut)', marginBottom:14 }}>12 meses · 5 recebidos · mês atual · 6 a receber (estimativa pela média histórica)</div>
+
+      <div style={{ display:'flex', gap:24, marginBottom:16, flexWrap:'wrap' }}>
+        <div>
+          <div style={{ fontSize:11, color:'var(--mut)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Últimos 6 meses</div>
+          <div style={{ fontSize:20, fontWeight:600, color:'var(--teal)' }}>{fmt(totalRecebido)}</div>
+        </div>
+        <div>
+          <div style={{ fontSize:11, color:'var(--mut)', textTransform:'uppercase', letterSpacing:'0.05em' }}>Próximos 6 meses (est.)</div>
+          <div style={{ fontSize:20, fontWeight:600, color:'#9fe1cb' }}>{fmt(totalEstimado)}</div>
+        </div>
+      </div>
+
+      <ResponsiveContainer width="100%" height={230}>
+        <ComposedChart data={dados} margin={{ top:8, right:8, bottom:0, left:0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+          <XAxis dataKey="label" tick={{ fontSize:10, fill:'#9aa0aa' }} axisLine={false} tickLine={false} />
+          <YAxis
+            domain={[0, Math.ceil(maxVal * 1.2 / 500) * 500]}
+            tickFormatter={fmtKx}
+            tick={{ fontSize:11, fill:'#9aa0aa' }} axisLine={false} tickLine={false} width={56}
+          />
+          <Tooltip content={<TooltipAgenda />} />
+          <Bar dataKey="valor" radius={[4,4,0,0]}>
+            {dados.map(d => <Cell key={d.label} fill={corBarra(d.tipo)} />)}
+          </Bar>
+        </ComposedChart>
+      </ResponsiveContainer>
+
+      <div style={{ display:'flex', gap:16, marginTop:10, fontSize:12, color:'var(--mut)' }}>
+        <span style={{ display:'flex', alignItems:'center', gap:5 }}><span style={{ width:10, height:10, borderRadius:2, background:'#1d9e75', display:'inline-block' }}/>Recebido</span>
+        <span style={{ display:'flex', alignItems:'center', gap:5 }}><span style={{ width:10, height:10, borderRadius:2, background:'#4d94e8', display:'inline-block' }}/>Mês atual</span>
+        <span style={{ display:'flex', alignItems:'center', gap:5 }}><span style={{ width:10, height:10, borderRadius:2, background:'#9fe1cb', display:'inline-block' }}/>A receber (estimado)</span>
+      </div>
+    </div>
+  )
+}
+
 /* ── Mapa de Calor por Ativo ──────────────────────────────────────────── */
 function MapaCalor({ proventos }) {
   // agrupar por ano → ativo → mes (só DIV/JCP/RENDIMENTO)
   const porAno = {}
   proventos.filter(p => TIPOS_REND.has(p.tipo)).forEach(p => {
     const d = p.data?.toDate ? p.data.toDate() : new Date(p.data)
-    const ano = d.getFullYear(), mes = d.getMonth()
+    const ano = d.getUTCFullYear(), mes = d.getUTCMonth()
     const ativo = p.ativo
     if (!porAno[ano]) porAno[ano] = {}
     if (!porAno[ano][ativo]) porAno[ano][ativo] = Array(12).fill(0)
@@ -390,8 +496,10 @@ export default function Carteira() {
         <RoscaComposicao posicoes={posicoes} />
         <Ranking titulo="Ranking de rentabilidade" subtitulo="retorno total por ativo" itens={rankRent} />
         <Ranking titulo="Ranking de dividendos" subtitulo="proventos recebidos · yield on cost" itens={rankDiv} />
-        <EvolucaoDividendos proventos={proventos} />
+        <AgendaProventos proventos={proventos} />
       </div>
+
+      <EvolucaoDividendos proventos={proventos} />
 
       <MapaCalor proventos={proventos} />
     </div>

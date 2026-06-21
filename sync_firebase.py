@@ -21,6 +21,9 @@ from firebase_admin import credentials, firestore
 EXCEL_FILE = "Carteira Investimentos.xlsx"
 KEY_FILE   = "firebase-key.json"
 USER_UID   = "3zESUj8nuPN1ViGpyCxnkJGIJYL2"
+
+# Apenas estes tipos são rendimentos em dinheiro — BONIF e variações ficam de fora
+TIPOS_PROV_VALIDOS = {'DIV', 'JCP', 'RENDIMENTO', 'RENDIMENTOS', 'DIVIDENDO', 'DIVIDENDOS'}
 # ─────────────────────────────────────────────────────────────────────────────
 
 MESES_PT = {
@@ -95,7 +98,20 @@ def sync():
 
     print("Buscando registros ja existentes no Firestore...")
     hashes_lanc = {d.to_dict().get('hash') for d in lanc_col.stream()}
-    hashes_prov = {d.to_dict().get('hash') for d in prov_col.stream()}
+
+    # Carrega proventos e remove os de tipo invalido (BONIF etc.) que possam ter entrado antes
+    hashes_prov = set()
+    removidos_inv = 0
+    for snap in prov_col.stream():
+        d = snap.to_dict()
+        tipo = (d.get('tipo') or '').strip().upper()
+        if tipo not in TIPOS_PROV_VALIDOS:
+            snap.reference.delete()
+            removidos_inv += 1
+        else:
+            hashes_prov.add(d.get('hash'))
+    if removidos_inv:
+        print(f"Removidos {removidos_inv} proventos invalidos do Firestore (BONIF etc.)")
 
     print(f"Lendo planilha: {EXCEL_FILE}")
     wb = openpyxl.load_workbook(EXCEL_FILE, data_only=True)
@@ -157,11 +173,14 @@ def sync():
 
         dt_p = parse_data(data_p)
         if ativo_p and tipo_p and dt_p:
+            tipo_str = str(tipo_p).strip().upper()
+            if tipo_str not in TIPOS_PROV_VALIDOS:
+                continue  # ignora BONIF e qualquer tipo não monetário
             rec = {
                 'data':  dt_p,
                 'ativo': str(ativo_p).strip().upper(),
                 'valor': limpar_valor(valor_p),
-                'tipo':  str(tipo_p).strip().upper(),
+                'tipo':  tipo_str,
             }
             h = md5({k: str(v) for k, v in rec.items()})
             rec['hash'] = h
