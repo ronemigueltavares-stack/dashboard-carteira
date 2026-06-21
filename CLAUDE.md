@@ -22,12 +22,18 @@
 - **Gráficos:** Recharts (rosca, linhas, barras). Treemap, mapa de calor e sparkline ficam em SVG/CSS próprios (Recharts não tem esses nativos).
 - **Back-end/dados:** Firebase — **Authentication** (login e senha) + **Firestore** (banco)
 - **Mobile (depois):** Capacitor (Android)
-- **Cotações de mercado:** API externa (ex.: BRAPI)
+- **Cotações de mercado:** yfinance (preços históricos), API Banco Central (CDI), BRAPI (cotações ao vivo)
 
 ## Como rodar e ver (deixar sempre funcionando)
 - `npm install` uma vez.
 - `npm run dev` para subir o servidor local — **me passe a URL**.
 - Eu abro no navegador; a tela recarrega sozinha a cada alteração que você fizer.
+
+## Scripts de sincronização (rodar nesta ordem ao atualizar a planilha)
+1. `python sync_firebase.py` — envia lançamentos e proventos do Excel para o Firestore
+2. `python sync_historico.py` — recalcula o histórico mensal (patrimônio, cota, CDI, IBOV) e grava no Firestore
+
+Python path: `C:\Users\Cliente\AppData\Local\Programs\Python\Python311\python.exe`
 
 ## Referência visual
 - O arquivo **`carteira-dashboard-dark.html`** (protótipo, colocado na raiz do projeto) é a **referência de aparência e comportamento**. Replique o visual dele (tema escuro), adaptando para React.
@@ -40,7 +46,8 @@
 
 ## Dados (resumo — detalhe em @HANDOFF.md)
 - Minha planilha Excel (`Carteira_Investimentos.xlsx`) é o **banco de dados de origem**.
-- Um script Python (`sync_firebase.py`) lê a planilha e envia para o Firestore, de forma **incremental** (sem duplicar).
-- O site lê do Firestore **em tempo real** (`onSnapshot`): quando eu atualizo a planilha e rodo o sync, **a tela atualiza sozinha**.
+- `sync_firebase.py` lê a planilha e envia para o Firestore (incremental, sem duplicar).
+- `sync_historico.py` calcula o histórico mensal e benchmarks a partir dos dados do Firestore.
+- O site lê do Firestore **em tempo real** (`onSnapshot`): quando atualizo a planilha e rodo os syncs, **a tela atualiza sozinha**.
 
 @HANDOFF.md
