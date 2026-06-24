@@ -7,9 +7,10 @@ node_modules/
 # Build
 dist/
 
-# Variáveis de ambiente (credenciais — nunca versionar)
+# Variáveis de ambiente e chaves (credenciais — nunca versionar)
 .env
 .env.local
+firebase-key.json
 
 # Arquivos temporários do Windows
 Thumbs.db
